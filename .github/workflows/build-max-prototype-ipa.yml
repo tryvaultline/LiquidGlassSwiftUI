@@ -1,0 +1,87 @@
+name: Build Max Prototype IPA
+
+on:
+  push:
+    branches:
+      - prototype/max-black-glass
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    name: Build unsigned iPhone IPA
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    env:
+      PROJECT: LiquidGlassExample.xcodeproj
+      SCHEME: LiquidGlassExample
+      DERIVED_DATA: .build
+      ARTIFACT_DIR: artifact
+      IPA_NAME: Max-Prototype-unsigned.ipa
+      BUNDLE_ID: com.tryvaultline.maxprototype
+      PRODUCT_NAME: Max
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inspect Xcode environment
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Build unsigned device app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            PRODUCT_NAME="$PRODUCT_NAME"
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$DERIVED_DATA/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          test -d "$APP_PATH"
+
+          rm -rf "$ARTIFACT_DIR"
+          mkdir -p "$ARTIFACT_DIR/Payload"
+          cp -R "$APP_PATH" "$ARTIFACT_DIR/Payload/Max.app"
+          (
+            cd "$ARTIFACT_DIR"
+            /usr/bin/zip -qry "$IPA_NAME" Payload
+          )
+
+          test -f "$ARTIFACT_DIR/$IPA_NAME"
+          ls -lh "$ARTIFACT_DIR/$IPA_NAME"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: max-prototype-unsigned-ipa
+          path: artifact/Max-Prototype-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: max-prototype-build-logs
+          path: .build/Logs
+          if-no-files-found: ignore
+          retention-days: 7
