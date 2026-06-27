@@ -1,6 +1,51 @@
 import SwiftUI
 
+/// Local compatibility primitives used by the prototype while the build runner ships the iOS 18 SDK.
+/// They intentionally preserve the visual hierarchy without relying on iOS 26-only Liquid Glass APIs.
+struct MaxFallbackGlassEffect {
+    static let clear = MaxFallbackGlassEffect()
+
+    func interactive() -> MaxFallbackGlassEffect {
+        self
+    }
+}
+
+struct GlassEffectContainer<Content: View>: View {
+    let spacing: CGFloat
+    private let content: () -> Content
+
+    init(spacing: CGFloat = 0, @ViewBuilder content: @escaping () -> Content) {
+        self.spacing = spacing
+        self.content = content
+    }
+
+    var body: some View {
+        content()
+    }
+}
+
 extension View {
+    func glassEffect(_ effect: MaxFallbackGlassEffect) -> some View {
+        self
+            .background(.ultraThinMaterial)
+            .overlay {
+                Rectangle()
+                    .stroke(.white.opacity(0.12), lineWidth: 1)
+            }
+    }
+
+    func glassEffect<S: Shape>(_ effect: MaxFallbackGlassEffect, in shape: S) -> some View {
+        self
+            .background(.ultraThinMaterial, in: shape)
+            .overlay {
+                shape.stroke(.white.opacity(0.13), lineWidth: 1)
+            }
+    }
+
+    func glassEffectID<ID: Hashable>(_ id: ID, in namespace: Namespace.ID) -> some View {
+        self
+    }
+
     func glassCircleButton(
         diameter: CGFloat = 56,
         tint: Color = .white,
