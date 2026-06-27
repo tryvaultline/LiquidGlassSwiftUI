@@ -131,6 +131,33 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum ChatDeliveryState: String, CaseIterable, Identifiable {
+    case sending
+    case sent
+    case delivered
+    case failed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .sending: "Sending"
+        case .sent: "Sent"
+        case .delivered: "Delivered"
+        case .failed: "Failed"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .sending: "clock"
+        case .sent: "checkmark"
+        case .delivered: "checkmark.circle.fill"
+        case .failed: "exclamationmark.circle.fill"
+        }
+    }
+}
+
 struct MaxMediaItem: Identifiable, Hashable {
     let id: String
     var title: String
@@ -207,6 +234,15 @@ final class MaxPrototypeStore: ObservableObject {
     @Published var language: AppLanguage = .english
     @Published var appearance: AppAppearance = .dark
     @Published var toast: PrototypeToast?
+
+    // Local-only chat presentation state. This deliberately has no API, socket, or persistence layer.
+    @Published private(set) var messageMediaAlbums: [String: [String]] = [:]
+    @Published private(set) var messageDeliveries: [String: ChatDeliveryState] = [:]
+    @Published private(set) var messageParents: [String: String] = [:]
+    @Published private(set) var messageReactions: [String: [String]] = [:]
+    @Published private(set) var pinnedMessageIDs: Set<String> = []
+    @Published private(set) var pinnedConversationIDs: Set<String> = []
+    @Published private(set) var mutedConversationIDs: Set<String> = []
 
     init() {
         media = [
@@ -351,6 +387,16 @@ final class MaxPrototypeStore: ObservableObject {
                 ]
             )
         ]
+
+        messageMediaAlbums = ["weekend-1": ["weekend-clips"]]
+        messageDeliveries = [
+            "weekend-1": .delivered,
+            "weekend-2": .delivered,
+            "noura-1": .delivered,
+            "noura-2": .delivered,
+            "notes-1": .delivered
+        ]
+        messageReactions = ["weekend-1": ["✨"], "noura-1": ["♥︎"]]
     }
 
     var savedMedia: [MaxMediaItem] {
@@ -383,6 +429,58 @@ final class MaxPrototypeStore: ObservableObject {
 
     func mediaItem(id: String) -> MaxMediaItem? {
         media.first { $0.id == id }
+    }
+
+    func conversation(id: String) -> MaxConversation? {
+        conversations.first { $0.id == id }
+    }
+
+    func message(id: String, in conversationID: String) -> MaxChatMessage? {
+        conversation(id: conversationID)?.messages.first { $0.id == id }
+    }
+
+    func mediaIDs(for messageID: String, in conversationID: String) -> [String] {
+        if let album = messageMediaAlbums[messageID] {
+            return album
+        }
+        guard let mediaID = message(id: messageID, in: conversationID)?.mediaID else { return [] }
+        return [mediaID]
+    }
+
+    func deliveryState(for messageID: String) -> ChatDeliveryState {
+        messageDeliveries[messageID] ?? .delivered
+    }
+
+    func parentMessageID(for messageID: String) -> String? {
+        messageParents[messageID]
+    }
+
+    func threadReplies(for messageID: String, in conversationID: String) -> [MaxChatMessage] {
+        conversation(id: conversationID)?.messages.filter { messageParents[$0.id] == messageID } ?? []
+    }
+
+    func threadReplyCount(for messageID: String, in conversationID: String) -> Int {
+        threadReplies(for: messageID, in: conversationID).count
+    }
+
+    func reactions(for messageID: String, in conversationID: String) -> [String] {
+        if let reactions = messageReactions[messageID] {
+            return reactions
+        }
+        guard let legacyReaction = message(id: messageID, in: conversationID)?.reaction else { return [] }
+        return [legacyReaction]
+    }
+
+    func isConversationPinned(_ conversationID: String) -> Bool {
+        pinnedConversationIDs.contains(conversationID)
+    }
+
+    func isConversationMuted(_ conversationID: String) -> Bool {
+        mutedConversationIDs.contains(conversationID)
+    }
+
+    func isMessagePinned(_ messageID: String) -> Bool {
+        pinnedMessageIDs.contains(messageID)
     }
 
     func markWatched(_ mediaID: String) {
@@ -499,44 +597,138 @@ final class MaxPrototypeStore: ObservableObject {
             createdIDs.append(newID)
         }
 
-        for mediaID in createdIDs {
-            conversations[recipientIndex].messages.append(
-                MaxChatMessage(
-                    id: "message-\(UUID().uuidString)",
-                    author: "You",
-                    text: caption.isEmpty ? "Shared privately" : caption,
-                    mediaID: mediaID,
-                    timeLabel: "Now",
-                    reaction: nil,
-                    isMine: true
-                )
-            )
-        }
-
+        guard let firstMediaID = createdIDs.first else { return }
+        let messageID = "media-\(UUID().uuidString)"
+        let message = MaxChatMessage(
+            id: messageID,
+            author: "You",
+            text: caption.isEmpty ? "Shared privately" : caption,
+            mediaID: firstMediaID,
+            timeLabel: "Now",
+            reaction: nil,
+            isMine: true
+        )
+        conversations[recipientIndex].messages.append(message)
+        messageMediaAlbums[messageID] = createdIDs
+        messageDeliveries[messageID] = .sending
+        settleMessage(messageID)
         showSuccess("Sent Privately", detail: "Added to \(conversations[recipientIndex].title) and your Library.", symbol: "paperplane.fill")
     }
 
-    func sendText(_ text: String, to conversationID: String) {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+    func sendText(_ text: String, to conversationID: String, replyTo parentMessageID: String? = nil) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty,
               let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+
+        let messageID = "text-\(UUID().uuidString)"
         conversations[index].messages.append(
             MaxChatMessage(
-                id: "text-\(UUID().uuidString)",
+                id: messageID,
                 author: "You",
-                text: text,
+                text: trimmedText,
                 mediaID: nil,
                 timeLabel: "Now",
                 reaction: nil,
                 isMine: true
             )
         )
+        if let parentMessageID {
+            messageParents[messageID] = parentMessageID
+        }
+        messageDeliveries[messageID] = .sending
+        settleMessage(messageID)
+    }
+
+    func retryMessage(_ messageID: String, in conversationID: String) {
+        guard message(id: messageID, in: conversationID) != nil else { return }
+        messageDeliveries[messageID] = .sending
+        settleMessage(messageID)
+        showSuccess("Message Retried", detail: "Sending again in this local prototype.", symbol: "arrow.clockwise.circle.fill")
+    }
+
+    func simulateMessageFailure(_ messageID: String, in conversationID: String) {
+        guard message(id: messageID, in: conversationID) != nil else { return }
+        messageDeliveries[messageID] = .failed
+        showSuccess("Message Failed", detail: "Use Retry to continue this prototype flow.", symbol: "exclamationmark.triangle.fill")
+    }
+
+    func deleteMessage(_ messageID: String, in conversationID: String) {
+        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        var identifiersToRemove: Set<String> = [messageID]
+        var didFindNewReplies = true
+        while didFindNewReplies {
+            didFindNewReplies = false
+            for (childID, parentID) in messageParents where identifiersToRemove.contains(parentID) && !identifiersToRemove.contains(childID) {
+                identifiersToRemove.insert(childID)
+                didFindNewReplies = true
+            }
+        }
+        conversations[conversationIndex].messages.removeAll { identifiersToRemove.contains($0.id) }
+        for id in identifiersToRemove {
+            messageMediaAlbums[id] = nil
+            messageDeliveries[id] = nil
+            messageParents[id] = nil
+            messageReactions[id] = nil
+            pinnedMessageIDs.remove(id)
+        }
+        showSuccess("Message Deleted", detail: "Removed from this local conversation.", symbol: "trash.fill")
+    }
+
+    func toggleReaction(_ reaction: String, to messageID: String, in conversationID: String) {
+        guard message(id: messageID, in: conversationID) != nil else { return }
+        var current = reactions(for: messageID, in: conversationID)
+        if let index = current.firstIndex(of: reaction) {
+            current.remove(at: index)
+        } else {
+            current.append(reaction)
+        }
+        messageReactions[messageID] = current
+        HapticFeedback.selection()
     }
 
     func react(to messageID: String, in conversationID: String, reaction: String) {
-        guard let conversationIndex = conversations.firstIndex(where: { $0.id == conversationID }),
-              let messageIndex = conversations[conversationIndex].messages.firstIndex(where: { $0.id == messageID }) else { return }
-        conversations[conversationIndex].messages[messageIndex].reaction = reaction
-        showSuccess("Reaction Added", detail: reaction, symbol: "face.smiling.fill")
+        toggleReaction(reaction, to: messageID, in: conversationID)
+    }
+
+    func togglePinnedMessage(_ messageID: String) {
+        if pinnedMessageIDs.contains(messageID) {
+            pinnedMessageIDs.remove(messageID)
+            showSuccess("Message Unpinned", detail: "Removed from pinned messages.", symbol: "pin.slash.fill")
+        } else {
+            pinnedMessageIDs.insert(messageID)
+            showSuccess("Message Pinned", detail: "Saved at the top of this prototype chat.", symbol: "pin.fill")
+        }
+    }
+
+    func togglePinnedConversation(_ conversationID: String) {
+        if pinnedConversationIDs.contains(conversationID) {
+            pinnedConversationIDs.remove(conversationID)
+            showSuccess("Chat Unpinned", detail: "Removed from the top of your inbox.", symbol: "pin.slash.fill")
+        } else {
+            pinnedConversationIDs.insert(conversationID)
+            showSuccess("Chat Pinned", detail: "Kept at the top of your inbox.", symbol: "pin.fill")
+        }
+    }
+
+    func toggleMutedConversation(_ conversationID: String) {
+        if mutedConversationIDs.contains(conversationID) {
+            mutedConversationIDs.remove(conversationID)
+            showSuccess("Notifications Restored", detail: "This local chat is no longer muted.", symbol: "bell.fill")
+        } else {
+            mutedConversationIDs.insert(conversationID)
+            showSuccess("Chat Muted", detail: "Muted locally in this prototype.", symbol: "bell.slash.fill")
+        }
+    }
+
+    func markConversationRead(_ conversationID: String) {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[index].unreadCount = 0
+    }
+
+    func markConversationUnread(_ conversationID: String) {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[index].unreadCount = max(1, conversations[index].unreadCount)
+        showSuccess("Marked Unread", detail: conversations[index].title, symbol: "circle.fill")
     }
 
     func createGroup(named name: String, with members: [String]) {
@@ -567,6 +759,14 @@ final class MaxPrototypeStore: ObservableObject {
             try? await Task.sleep(nanoseconds: 2_200_000_000)
             guard self?.toast?.id == newToast.id else { return }
             self?.toast = nil
+        }
+    }
+
+    private func settleMessage(_ messageID: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            guard self?.messageDeliveries[messageID] == .sending else { return }
+            self?.messageDeliveries[messageID] = .delivered
         }
     }
 
