@@ -1,0 +1,114 @@
+name: Build IPA for Sideloadly
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "Unique Bundle ID for this build"
+        required: true
+        default: "com.gnooouk.liquidglassexample"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "LiquidGlassExample/**"
+      - "LiquidGlassExample.xcodeproj/**"
+      - ".github/workflows/build-ipa.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: liquidglass-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    name: Build unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    env:
+      PROJECT_PATH: LiquidGlassExample.xcodeproj
+      SCHEME: LiquidGlassExample
+      CONFIGURATION: Release
+      ARCHIVE_PATH: ${{ github.workspace }}/build/LiquidGlassExample.xcarchive
+      EXPORT_PATH: ${{ github.workspace }}/build/export
+      IPA_NAME: LiquidGlassExample-unsigned.ipa
+      BUNDLE_ID: ${{ inputs.bundle_id || 'com.gnooouk.liquidglassexample' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Show Xcode environment
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Build unsigned iOS archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p build
+
+          xcodebuild \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            clean archive \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            VALIDATE_PRODUCT=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | tee build/xcodebuild.log
+
+      - name: Package IPA for Sideloadly
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_PATH="$ARCHIVE_PATH/Products/Applications/${SCHEME}.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Built .app was not found at: $APP_PATH"
+            exit 1
+          fi
+
+          rm -rf "$EXPORT_PATH"
+          mkdir -p "$EXPORT_PATH/Payload"
+
+          ditto "$APP_PATH" "$EXPORT_PATH/Payload/${SCHEME}.app"
+
+          (
+            cd "$EXPORT_PATH"
+            /usr/bin/zip -qry "$IPA_NAME" Payload
+          )
+
+          unzip -t "$EXPORT_PATH/$IPA_NAME"
+
+          echo "Bundle ID:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleIdentifier" \
+            "$EXPORT_PATH/Payload/${SCHEME}.app/Info.plist"
+
+          shasum -a 256 "$EXPORT_PATH/$IPA_NAME" \
+            > "$EXPORT_PATH/$IPA_NAME.sha256"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: LiquidGlassExample-Sideloadly-IPA-${{ github.run_number }}
+          path: |
+            build/export/LiquidGlassExample-unsigned.ipa
+            build/export/LiquidGlassExample-unsigned.ipa.sha256
+            build/xcodebuild.log
+          if-no-files-found: error
+          retention-days: 14
