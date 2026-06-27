@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - prototype/max-black-glass
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'LiquidGlassExample/**'
+      - 'LiquidGlassExample.xcodeproj/**'
+      - '.github/workflows/build-max-prototype-ipa.yml'
   workflow_dispatch:
 
 permissions:
