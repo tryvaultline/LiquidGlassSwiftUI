@@ -10,7 +10,7 @@ struct TypingStatusView: View {
     private var messages: [String] {
         [
             seedMessage,
-            "Writing. Erasing. Repeating.",
+            "Private media moves with you.",
             "Rate every title from one to ten.",
             "Your library stays personal."
         ]
@@ -30,7 +30,7 @@ struct TypingStatusView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 15)
-        .denseGlassPanel(cornerRadius: 20)
+        .maxSurface(cornerRadius: 20)
         .task {
             await runTypingLoop()
         }
@@ -46,32 +46,24 @@ struct TypingStatusView: View {
     private func runTypingLoop() async {
         while !Task.isCancelled {
             let message = messages[messageIndex]
+            HapticFeedback.typing()
 
-            for (index, character) in message.enumerated() {
+            for character in message {
                 guard !Task.isCancelled else { return }
-
                 displayedText.append(character)
-
-                if character != " ", index.isMultiple(of: 2) {
-                    HapticFeedback.typing()
-                }
-
                 try? await Task.sleep(nanoseconds: 55_000_000)
             }
 
+            HapticFeedback.typing()
             try? await Task.sleep(nanoseconds: 1_250_000_000)
 
+            HapticFeedback.erase()
             while !displayedText.isEmpty {
                 guard !Task.isCancelled else { return }
-
                 displayedText.removeLast()
-
-                if displayedText.count.isMultiple(of: 2) {
-                    HapticFeedback.erase()
-                }
-
                 try? await Task.sleep(nanoseconds: 34_000_000)
             }
+            HapticFeedback.erase()
 
             messageIndex = (messageIndex + 1) % messages.count
             try? await Task.sleep(nanoseconds: 340_000_000)
