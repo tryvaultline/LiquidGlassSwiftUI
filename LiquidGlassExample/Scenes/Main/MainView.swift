@@ -56,6 +56,19 @@ struct MainView: View {
             .environmentObject(store)
         }
         .overlay(alignment: .bottom) {
+            if selectedTab == .home,
+               !store.isScreenLocked,
+               presentedMedia == nil,
+               !searchPresented,
+               store.toast == nil {
+                TypingStatusView(seedMessage: "Private media stays between you and your circles.")
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 98)
+                    .allowsHitTesting(false)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .overlay(alignment: .bottom) {
             if let toast = store.toast {
                 MaxToastView(toast: toast)
                     .padding(.horizontal, 20)
@@ -82,6 +95,9 @@ struct MainView: View {
         .animation(.easeInOut(duration: 0.22), value: store.toast)
         .animation(.easeInOut(duration: 0.2), value: showPrivacyShield)
         .preferredColorScheme(.dark)
+        .onAppear {
+            store.ensurePhotoSeed()
+        }
         .onChange(of: scenePhase) { _, phase in
             withAnimation(.easeInOut(duration: 0.16)) {
                 showPrivacyShield = phase != .active
