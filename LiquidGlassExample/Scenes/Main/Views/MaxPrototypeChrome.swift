@@ -247,8 +247,8 @@ struct MaxEmptyState: View {
     let symbol: String
     let title: String
     let detail: String
-    let actionTitle: String
-    let action: () -> Void
+    let actionTitle: String?
+    let action: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 14) {
@@ -267,15 +267,17 @@ struct MaxEmptyState: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.53))
 
-            Button(action: action) {
-                Text(actionTitle)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 11)
-                    .background(.white, in: Capsule())
+            if let actionTitle, let action {
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .background(.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(24)
         .frame(maxWidth: .infinity)
